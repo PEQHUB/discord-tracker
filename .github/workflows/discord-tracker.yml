@@ -4,17 +4,6 @@ on:
   schedule:
     - cron: "*/10 * * * *"
   workflow_dispatch:
-    inputs:
-      backfill:
-        description: "Backfill N data points (15s intervals)"
-        required: false
-        type: boolean
-        default: false
-      count:
-        description: "Number of backfill points"
-        required: false
-        type: number
-        default: 20
 
 permissions:
   contents: write
@@ -29,41 +18,22 @@ jobs:
         run: |
           set -euo pipefail
           python3 << 'PYEOF'
-          import json, datetime, urllib.request, time, os, sys
-
-          BACKFILL = "${{ inputs.backfill }}" == "true"
-          COUNT = int("${{ inputs.count }}" or "20") if BACKFILL else 1
+          import json, datetime, urllib.request, sys
           URL = "https://discord.com/api/v10/invites/F6AUTeWJHM"
-
           with open("dashboard/data/members.json") as f:
               history = json.load(f)
-
-          fetched = 0
-          for i in range(COUNT):
-              if i > 0:
-                  time.sleep(15)
-              try:
-                  req = urllib.request.Request(URL, headers={"User-Agent": "Mozilla/5.0"})
-                  resp = urllib.request.urlopen(req, timeout=10)
-                  data = json.loads(resp.read())
-                  profile = data["profile"]
-                  entry = {
-                      "timestamp": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-                      "memberCount": profile["member_count"],
-                      "onlineCount": profile["online_count"]
-                  }
-                  history.append(entry)
-                  fetched += 1
-                  print(f"Point {i+1}/{COUNT}: {entry['memberCount']} members, {entry['onlineCount']} online")
-              except Exception as e:
-                  print(f"Point {i+1} failed: {e}", file=sys.stderr)
-                  if not BACKFILL:
-                      sys.exit(1)
-
+          req = urllib.request.Request(URL, headers={"User-Agent": "Mozilla/5.0"})
+          resp = urllib.request.urlopen(req, timeout=10)
+          data = json.loads(resp.read())
+          entry = {
+              "timestamp": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "memberCount": data["profile"]["member_count"],
+              "onlineCount": data["profile"]["online_count"]
+          }
+          history.append(entry)
           with open("dashboard/data/members.json", "w") as f:
               json.dump(history, f, indent=2)
-
-          print(f"Total points: {len(history)}, fetched this run: {fetched}")
+          print(f"Fetched: {entry['memberCount']} members, {entry['onlineCount']} online")
           PYEOF
 
       - name: Commit and push
