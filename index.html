@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RenoDX Discord Tracker</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns-bundle.min.js"></script>
+</head>
+<body>
+  <main class="dashboard">
+    <header class="header">
+      <h1>RenoDX <span>Discord</span> Tracker</h1>
+      <p class="subtitle">
+        <span class="live-dot"></span>Live member count &mdash; rate of change &amp; 7-day forecast
+      </p>
+    </header>
+
+    <section class="stats-grid" id="stats-grid">
+      <div class="empty-state" style="grid-column: 1 / -1;">
+        <div class="icon">&#128202;</div>
+        <p>Waiting for first data point. The tracker polls every 10 minutes.</p>
+      </div>
+    </section>
+
+    <section class="charts-grid">
+      <div class="chart-panel">
+        <h2>Member Count &mdash; 7-Day Forecast</h2>
+        <div class="chart-container">
+          <canvas id="mainChart"></canvas>
+        </div>
+      </div>
+      <div class="chart-panel">
+        <h2>Daily Growth Rate</h2>
+        <div class="chart-container small">
+          <canvas id="rateChart"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      Data sourced from the public <a href="https://discord.com/developers/docs/resources/invite" target="_blank" rel="noopener">Discord Invite API</a>.
+      &nbsp;Poll interval: 10 min.&nbsp;
+      <a href="https://github.com/PEQHUB/discord-tracker" target="_blank" rel="noopener">PEQHUB/discord-tracker</a>
+    </footer>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
