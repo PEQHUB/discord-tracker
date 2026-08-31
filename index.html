@@ -8,8 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns-bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <main class="dashboard">
@@ -17,88 +16,56 @@
       <div class="header-row">
         <div>
           <h1>RenoDX <span class="accent">Discord</span> Tracker</h1>
-          <p class="subtitle">Member count, derivatives, and 7-day forecast</p>
+          <p class="subtitle">Live member count and growth forecast</p>
         </div>
-        <div class="live-badge">
-          <span class="live-dot"></span>
-          <span class="live-text">LIVE</span>
-        </div>
+        <div class="live-badge"><span class="live-dot"></span><span>LIVE</span></div>
       </div>
     </header>
 
-    <section class="stat-bar" id="stat-bar">
-      <div class="stat-segment border-r">
-        <span class="stat-label">MEMBERS</span>
+    <section class="stat-bar" id="stats">
+      <div class="stat-segment">
+        <span class="stat-label">Members</span>
         <span class="stat-value mono" id="stat-members">&mdash;</span>
       </div>
-      <div class="stat-segment border-r">
-        <span class="stat-label">ONLINE</span>
+      <div class="stat-segment">
+        <span class="stat-label">Online</span>
         <span class="stat-value mono" id="stat-online">&mdash;</span>
       </div>
-      <div class="stat-segment border-r">
-        <span class="stat-label">1ST DERIV (VELOCITY)</span>
-        <span class="stat-value mono" id="stat-d1">&mdash;</span>
-      </div>
-      <div class="stat-segment border-r">
-        <span class="stat-label">2ND DERIV (ACCEL)</span>
-        <span class="stat-value mono" id="stat-d2">&mdash;</span>
-      </div>
-      <div class="stat-segment border-r">
-        <span class="stat-label">3RD DERIV (JERK)</span>
-        <span class="stat-value mono" id="stat-d3">&mdash;</span>
-      </div>
-      <div class="stat-segment border-r">
-        <span class="stat-label">7-DAY FORECAST</span>
-        <span class="stat-value mono" id="stat-forecast7">&mdash;</span>
+      <div class="stat-segment">
+        <span class="stat-label">Change</span>
+        <span class="stat-value mono" id="stat-change">&mdash;</span>
       </div>
       <div class="stat-segment">
-        <span class="stat-label">R&sup2;</span>
-        <span class="stat-value mono" id="stat-r2">&mdash;</span>
+        <span class="stat-label">7-Day Forecast</span>
+        <span class="stat-value mono" id="stat-forecast">&mdash;</span>
       </div>
     </section>
 
     <section class="chart-panel">
       <div class="chart-header">
-        <h2>Member Count</h2>
-        <div class="chart-badges">
-          <span class="chart-badge green">Taylor 3rd-Order</span>
-          <span class="chart-badge blue">Linear</span>
-        </div>
+        <h2>Member Count Over Time</h2>
+        <span class="chart-badge">7-day forecast</span>
       </div>
-      <div class="legend">
-        <div class="legend-item"><span class="legend-dot" style="background:#5865F2"></span> Actual</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#3fb950"></span> 3rd-Order Forecast</div>
-        <div class="legend-item"><span class="legend-dot" style="background:rgba(88,101,242,0.4)"></span> Linear Forecast</div>
-      </div>
-      <div class="chart-body">
-        <canvas id="mainChart"></canvas>
-      </div>
+      <div class="chart-wrap"><canvas id="mainChart"></canvas></div>
+      <p class="chart-note" id="chart-note"></p>
     </section>
 
     <section class="chart-panel">
       <div class="chart-header">
-        <h2>Derivatives</h2>
-        <span class="chart-badge">Rate of Change</span>
+        <h2>Growth Per Interval</h2>
+        <span class="chart-badge muted">Change between polls</span>
       </div>
-      <div class="legend">
-        <div class="legend-item"><span class="legend-dot" style="background:#3fb950"></span> 1st (Velocity)</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#f0883e"></span> 2nd (Acceleration)</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#f85149"></span> 3rd (Jerk)</div>
-      </div>
-      <div class="chart-body chart-body-sm">
-        <canvas id="rateChart"></canvas>
-      </div>
+      <div class="chart-wrap small"><canvas id="growthChart"></canvas></div>
     </section>
 
     <footer class="footer">
-      <span>Data from <a href="https://discord.com/developers/docs/resources/invite" target="_blank" rel="noopener">Discord Invite API</a></span>
+      <span>Data: <a href="https://discord.com/developers/docs/resources/invite" target="_blank" rel="noopener">Discord Invite API</a> (public, no bot)</span>
       <span class="sep">&middot;</span>
       <span>Polls every 10 min</span>
       <span class="sep">&middot;</span>
-      <span id="last-updated">Last updated: &mdash;</span>
+      <span id="last-updated">Loading&hellip;</span>
     </footer>
   </main>
-
   <script src="app.js"></script>
 </body>
 </html>
