@@ -1,16 +1,19 @@
 (function () {
   var DATA_URL = "data/members.json";
-  var FORECAST_HOURS = 168;
   var POLL_MS = 5 * 60 * 1000;
+  var FORECAST_HOURS = 168;
+  var mainChartInstance = null;
+  var rateChartInstance = null;
 
-  var el = function (id) { return document.getElementById(id); };
+  function el(id) { return document.getElementById(id); }
 
   function fmt(n) {
+    if (n == null || isNaN(n)) return "\u2014";
     return n.toLocaleString("en-US");
   }
 
   function fetchData() {
-    fetch(DATA_URL)
+    fetch(DATA_URL + "?t=" + Date.now())
       .then(function (r) {
         if (!r.ok) throw new Error(r.statusText);
         return r.json();
@@ -18,48 +21,64 @@
       .then(buildDashboard)
       .catch(function (err) {
         console.error("Failed to load data:", err);
-        el("stats-grid").innerHTML =
-          '<div class="empty-state"><div class="icon">&#9888;</div><p>Failed to load tracker data. Check the console.</p></div>';
       });
   }
 
   function buildDashboard(history) {
-    if (!history || history.length < 2) {
+    if (!history || history.length < 1) {
       renderEmpty();
       return;
     }
 
     var latest = history[history.length - 1];
-    var first = history[0];
 
-    var memberCount = latest.memberCount;
-    var onlineCount = latest.onlineCount;
+    el("stat-members").textContent = fmt(latest.memberCount);
+    el("stat-online").textContent = fmt(latest.onlineCount);
+
+    var lastUpdated = document.getElementById("last-updated");
+    if (lastUpdated) {
+      var d = new Date(latest.timestamp);
+      lastUpdated.textContent = "Last updated: " + d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    }
+
+    if (history.length < 2) {
+      el("stat-growth").textContent = "\u2014";
+      el("stat-forecast7").textContent = "\u2014";
+      el("stat-forecast30").textContent = "\u2014";
+      el("stat-r2").textContent = "\u2014";
+      return;
+    }
+
+    var first = history[0];
     var totalDays = (new Date(latest.timestamp) - new Date(first.timestamp)) / 86400000;
-    var membersPerDay = totalDays > 0 ? (memberCount - first.memberCount) / totalDays : 0;
+    var membersPerDay = totalDays > 0 ? (latest.memberCount - first.memberCount) / totalDays : 0;
 
     var reg = linearRegression(history);
-    var forecast = generateForecast(history, reg, FORECAST_HOURS);
-
     var predicted7 = Math.max(0, Math.round(reg.slope * (history.length - 1 + 168) + reg.intercept));
     var predicted30 = Math.max(0, Math.round(reg.slope * (history.length - 1 + 720) + reg.intercept));
 
-    renderStats(memberCount, onlineCount, membersPerDay, predicted7, predicted30, reg.r2);
-    renderMainChart(history, forecast);
+    var growthEl = el("stat-growth");
+    var growthSign = membersPerDay >= 0 ? "+" : "";
+    growthEl.textContent = growthSign + membersPerDay.toFixed(1);
+    growthEl.style.color = membersPerDay >= 0 ? "#3fb950" : "#f85149";
+
+    el("stat-forecast7").textContent = fmt(predicted7);
+    el("stat-forecast30").textContent = fmt(predicted30);
+    el("stat-r2").textContent = reg.r2.toFixed(3);
+
+    renderMainChart(history, reg);
     renderRateChart(history);
   }
 
-  function linearRegression(history) {
-    var n = history.length;
-    if (n < 2) return { slope: 0, intercept: history[0] ? history[0].memberCount : 0, r2: 0 };
+  function linearRegression(data) {
+    var n = data.length;
+    if (n < 2) return { slope: 0, intercept: data[0] ? data[0].memberCount : 0, r2: 0 };
 
-    var sx = 0, sy = 0, sxy = 0, sxx = 0, syy = 0;
-    history.forEach(function (p, i) {
-      sx += i;
-      sy += p.memberCount;
-      sxy += i * p.memberCount;
-      sxx += i * i;
-      syy += p.memberCount * p.memberCount;
-    });
+    var sx = 0, sy = 0, sxy = 0, sxx = 0;
+    for (var i = 0; i < n; i++) {
+      var y = data[i].memberCount;
+      sx += i; sy += y; sxy += i * y; sxx += i * i;
+    }
 
     var denom = n * sxx - sx * sx;
     var slope = denom !== 0 ? (n * sxy - sx * sy) / denom : 0;
@@ -67,11 +86,11 @@
 
     var yMean = sy / n;
     var ssRes = 0, ssTot = 0;
-    history.forEach(function (p, i) {
-      var pred = slope * i + intercept;
-      ssRes += (p.memberCount - pred) * (p.memberCount - pred);
-      ssTot += (p.memberCount - yMean) * (p.memberCount - yMean);
-    });
+    for (var j = 0; j < n; j++) {
+      var pred = slope * j + intercept;
+      ssRes += (data[j].memberCount - pred) * (data[j].memberCount - pred);
+      ssTot += (data[j].memberCount - yMean) * (data[j].memberCount - yMean);
+    }
     var r2 = ssTot === 0 ? 1 : 1 - ssRes / ssTot;
 
     return { slope: slope, intercept: intercept, r2: r2 };
@@ -81,196 +100,152 @@
     var n = history.length;
     var lastTs = new Date(history[n - 1].timestamp).getTime();
     var intervalMs = n > 1 ? (lastTs - new Date(history[0].timestamp).getTime()) / (n - 1) : 600000;
-    var intervalPoints = intervalMs / 60000;
+    var intervalMinutes = intervalMs / 60000;
     var points = [];
     for (var i = 1; i <= hoursAhead; i++) {
       var date = new Date(lastTs + intervalMs * i);
-      var idx = n - 1 + (i * 60) / intervalPoints;
-      var predicted = reg.slope * idx + reg.intercept;
-      points.push({ x: date.toISOString(), y: Math.max(0, Math.round(predicted)) });
+      var idx = n - 1 + (i * 60) / intervalMinutes;
+      var predicted = Math.max(0, Math.round(reg.slope * idx + reg.intercept));
+      points.push({ x: date.toISOString(), y: predicted });
     }
     return points;
   }
 
-  function renderStats(memberCount, onlineCount, membersPerDay, pred7, pred30, r2) {
-    var stats = el("stats-grid");
-    var growthClass = membersPerDay >= 0 ? "up" : "down";
-    var growthArrow = membersPerDay >= 0 ? "&#9650;" : "&#9660;";
-    var growthSign = membersPerDay >= 0 ? "+" : "";
+  function renderMainChart(history, reg) {
+    if (mainChartInstance) mainChartInstance.destroy();
 
-    stats.innerHTML =
-      '<div class="stat-card">' +
-        '<div class="label">Total Members</div>' +
-        '<div class="value accent" id="val-members">' + fmt(memberCount) + "</div>" +
-        '<div class="delta ' + growthClass + '">' + growthArrow + " " + growthSign + membersPerDay.toFixed(1) + "/day</div>" +
-      "</div>" +
-      '<div class="stat-card">' +
-        '<div class="label">Online Now</div>' +
-        '<div class="value" id="val-online">' + fmt(onlineCount) + "</div>" +
-        '<div class="delta">' + ((onlineCount / memberCount) * 100).toFixed(1) + "% of total</div>" +
-      "</div>" +
-      '<div class="stat-card">' +
-        '<div class="label">Predicted 7 Days</div>' +
-        '<div class="value green">' + fmt(pred7) + "</div>" +
-        '<div class="delta up">&#9650; +' + fmt(Math.round(pred7 - memberCount)) + "</div>" +
-      "</div>" +
-      '<div class="stat-card">' +
-        '<div class="label">Predicted 30 Days</div>' +
-        '<div class="value purple">' + fmt(pred30) + "</div>" +
-        '<div class="delta up">&#9650; +' + fmt(Math.round(pred30 - memberCount)) + "</div>" +
-      "</div>" +
-      '<div class="stat-card">' +
-        '<div class="label">R&sup2; Confidence</div>' +
-        '<div class="value">' + r2.toFixed(3) + "</div>" +
-        '<div class="delta">' + (r2 > 0.7 ? "Strong trend" : r2 > 0.4 ? "Moderate trend" : "Weak trend") + "</div>" +
-      "</div>";
-  }
+    var ctx = el("mainChart");
+    if (!ctx) return;
 
-  function renderMainChart(history, forecast) {
-    var ctx = el("mainChart").getContext("2d");
-    var allPts = history.map(function (p) { return { x: p.timestamp, y: p.memberCount }; }).concat(forecast);
-    var forecastStart = history.length - 1;
+    var historical = history.map(function (p) {
+      return { x: p.timestamp, y: p.memberCount };
+    });
 
-    new Chart(ctx, {
+    var forecast = generateForecast(history, reg, FORECAST_HOURS);
+    var forecastStart = historical.length - 1;
+
+    mainChartInstance = new Chart(ctx.getContext("2d"), {
       type: "line",
       data: {
-        labels: allPts.map(function (p) { return p.x; }),
+        labels: historical.concat(forecast).map(function (p) { return p.x; }),
         datasets: [
           {
             label: "Members",
-            data: allPts.map(function (p) { return p.y; }),
-            borderColor: "rgba(88, 101, 242, 0.9)",
-            backgroundColor: "rgba(88, 101, 242, 0.08)",
+            data: historical.concat(forecast).map(function (p) { return p.y; }),
             fill: true,
             tension: 0.3,
             pointRadius: 0,
             pointHitRadius: 10,
             borderWidth: 2,
             segment: {
-              borderColor: function (_ctx) {
-                return _ctx.p0DataIndex >= forecastStart - 1 ? "rgba(63, 185, 80, 0.6)" : "rgba(88, 101, 242, 0.9)";
+              borderColor: function (ctx) {
+                return ctx.p0DataIndex >= forecastStart ? "rgba(63, 185, 80, 0.6)" : "rgba(88, 101, 242, 0.9)";
               },
-              borderDash: function (_ctx) {
-                return _ctx.p0DataIndex >= forecastStart - 1 ? [6, 4] : [];
+              borderDash: function (ctx) {
+                return ctx.p0DataIndex >= forecastStart ? [6, 4] : [];
               },
-            },
-          },
-          {
-            label: "Forecast",
-            data: forecast.map(function (p) { return p.y; }),
-            borderColor: "rgba(63, 185, 80, 0.7)",
-            backgroundColor: "transparent",
-            fill: false,
-            tension: 0.3,
-            pointRadius: 0,
-            borderWidth: 2,
-            borderDash: [6, 4],
-            spanGaps: true,
-          },
-        ],
+              backgroundColor: function (ctx) {
+                return ctx.p0DataIndex >= forecastStart ? "rgba(63, 185, 80, 0.04)" : "rgba(88, 101, 242, 0.06)";
+              }
+            }
+          }
+        ]
       },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: "index", intersect: false },
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: "#161b22",
-            borderColor: "#30363d",
-            borderWidth: 1,
-            titleColor: "#c9d1d9",
-            bodyColor: "#8b949e",
-            padding: 12,
-            callbacks: {
-              label: function (_ctx) { return _ctx.dataset.label + ": " + fmt(_ctx.parsed.y) + " members"; },
-            },
-          },
-        },
-        scales: {
-          x: {
-            type: "time",
-            time: { tooltipFormat: "MMM d, yyyy HH:mm", displayFormats: { hour: "MMM d HH:mm", day: "MMM d" } },
-            ticks: { color: "#8b949e", maxTicksLimit: 10, font: { size: 11 } },
-            grid: { color: "rgba(48, 54, 61, 0.5)" },
-          },
-          y: {
-            ticks: { color: "#8b949e", callback: function (v) { return fmt(v); }, font: { size: 11 } },
-            grid: { color: "rgba(48, 54, 61, 0.5)" },
-          },
-        },
-      },
+      options: chartOptions(function (v) { return fmt(v); })
     });
   }
 
   function renderRateChart(history) {
-    var ctx = el("rateChart").getContext("2d");
-    var dailyRates = computeDailyRates(history);
+    if (rateChartInstance) rateChartInstance.destroy();
 
-    new Chart(ctx, {
+    var ctx = el("rateChart");
+    if (!ctx) return;
+
+    var rates = [];
+    for (var i = 1; i < history.length; i++) {
+      var ts = new Date(history[i].timestamp);
+      rates.push({
+        label: ts.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+        rate: history[i].memberCount - history[i - 1].memberCount
+      });
+    }
+
+    rateChartInstance = new Chart(ctx.getContext("2d"), {
       type: "bar",
       data: {
-        labels: dailyRates.map(function (d) { return d.label; }),
-        datasets: [
-          {
-            label: "Members / Day",
-            data: dailyRates.map(function (d) { return d.rate; }),
-            backgroundColor: dailyRates.map(function (d) { return d.rate >= 0 ? "rgba(63, 185, 80, 0.6)" : "rgba(248, 81, 73, 0.6)"; }),
-            borderColor: dailyRates.map(function (d) { return d.rate >= 0 ? "rgba(63, 185, 80, 1)" : "rgba(248, 81, 73, 1)"; }),
-            borderWidth: 1,
-            borderRadius: 4,
-          },
-        ],
+        labels: rates.map(function (d) { return d.label; }),
+        datasets: [{
+          data: rates.map(function (d) { return d.rate; }),
+          backgroundColor: rates.map(function (d) {
+            return d.rate >= 0 ? "rgba(63, 185, 80, 0.6)" : "rgba(248, 81, 73, 0.6)";
+          }),
+          borderColor: rates.map(function (d) {
+            return d.rate >= 0 ? "rgba(63, 185, 80, 1)" : "rgba(248, 81, 73, 1)";
+          }),
+          borderWidth: 1,
+          borderRadius: 4
+        }]
       },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: "#161b22",
-            borderColor: "#30363d",
-            borderWidth: 1,
-            titleColor: "#c9d1d9",
-            bodyColor: "#8b949e",
-            callbacks: {
-              label: function (_ctx) { return fmt(_ctx.parsed.y) + " members/day"; },
-            },
-          },
-        },
-        scales: {
-          x: { ticks: { color: "#8b949e", maxTicksLimit: 12, font: { size: 11 } }, grid: { display: false } },
-          y: {
-            ticks: { color: "#8b949e", callback: function (v) { return (v >= 0 ? "+" : "") + fmt(v); }, font: { size: 11 } },
-            grid: { color: "rgba(48, 54, 61, 0.5)" },
-          },
-        },
-      },
+      options: chartOptions(function (v) { return (v >= 0 ? "+" : "") + fmt(v); })
     });
   }
 
-  function computeDailyRates(history) {
-    var rates = [];
-    for (var i = 1; i < history.length; i++) {
-      var prev = history[i - 1].memberCount;
-      var curr = history[i].memberCount;
-      var ts = new Date(history[i].timestamp);
-      var label = ts.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-      rates.push({ label: label, rate: curr - prev });
-    }
-    return rates;
+  function chartOptions(tickCallback) {
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: "#0c0c0c",
+          borderColor: "#1a1a1a",
+          borderWidth: 1,
+          titleColor: "#f4f4f5",
+          bodyColor: "#71717a",
+          padding: 12,
+          titleFont: { family: "'Inter', sans-serif", weight: "600", size: 12 },
+          bodyFont: { family: "'JetBrains Mono', monospace", size: 11 },
+          callbacks: {
+            title: function (items) {
+              if (!items.length) return "";
+              var d = new Date(items[0].label);
+              return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) +
+                " " + d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: "time",
+          time: {
+            tooltipFormat: "MMM d, yyyy HH:mm",
+            displayFormats: { hour: "MMM d HH:mm", day: "MMM d" }
+          },
+          ticks: { color: "#3f3f46", maxTicksLimit: 8, font: { family: "'JetBrains Mono', monospace", size: 10 } },
+          grid: { color: "rgba(26, 26, 26, 0.8)" },
+          border: { color: "rgba(26, 26, 26, 0.8)" }
+        },
+        y: {
+          ticks: {
+            color: "#3f3f46",
+            callback: tickCallback,
+            font: { family: "'JetBrains Mono', monospace", size: 10 },
+            maxTicksLimit: 6
+          },
+          grid: { color: "rgba(26, 26, 26, 0.8)" },
+          border: { color: "rgba(26, 26, 26, 0.8)" }
+        }
+      }
+    };
   }
 
   function renderEmpty() {
-    el("stats-grid").innerHTML =
-      '<div class="empty-state" style="grid-column: 1 / -1;">' +
-        '<div class="icon">&#128202;</div>' +
-        '<p>Waiting for first data point. The tracker polls every 10 minutes.</p>' +
-      "</div>";
-    el("mainChart").parentElement.innerHTML =
-      '<div class="empty-state"><div class="icon">&#128200;</div><p>Data will appear here once collected.</p></div>';
-    el("rateChart").parentElement.innerHTML =
-      '<div class="empty-state"><div class="icon">&#128201;</div><p>Rate data will appear here once collected.</p></div>';
+    var chartPanel = el("mainChart");
+    if (chartPanel) chartPanel.parentElement.innerHTML = '<div class="empty-state"><p>Waiting for data. The tracker polls every 10 minutes.</p></div>';
+    var ratePanel = el("rateChart");
+    if (ratePanel) ratePanel.parentElement.innerHTML = '<div class="empty-state"><p>Rate data will appear once collected.</p></div>';
   }
 
   function init() {
@@ -278,5 +253,9 @@
     setInterval(fetchData, POLL_MS);
   }
 
-  document.addEventListener("DOMContentLoaded", init);
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
 })();
