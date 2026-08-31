@@ -1,31 +1,21 @@
 (function () {
   var DATA_URL = "data/members.json";
-  var FORECAST_POINTS = 42; // 7 days at 7 points per day for smooth line
   var mainChart = null;
   var growthChart = null;
 
   function el(id) { return document.getElementById(id); }
   function fmt(n) { return n == null ? "\u2014" : n.toLocaleString("en-US"); }
 
-  function shortDate(iso) {
-    var d = new Date(iso);
-    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " " +
-           d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
-  }
-
   function fetchData() {
     fetch(DATA_URL + "?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) { if (!r.ok) throw new Error(r.statusText); return r.json(); })
       .then(render)
-      .catch(function (e) {
-        console.error(e);
-        el("last-updated").textContent = "Failed to load data";
-      });
+      .catch(function (e) { console.error(e); el("last-updated").textContent = "Failed to load data"; });
   }
 
   function render(history) {
     if (!history || !history.length) {
-      el("last-updated").textContent = "No data yet";
+      el("last-updated").textContent = "No data yet — first poll in ~10 min";
       return;
     }
     var latest = history[history.length - 1];
@@ -36,148 +26,113 @@
     if (history.length < 2) {
       el("stat-change").textContent = "\u2014";
       el("stat-forecast").textContent = "\u2014";
-      document.getElementById("chart-note").textContent = "Need at least 2 data points for forecast.";
+      el("chart-note").textContent = "Collecting data — forecast appears after 2 polls (~20 min).";
       drawMain(history, null);
       drawGrowth(history);
       return;
     }
 
-    // simple change
     var first = history[0];
-    var last = history[history.length - 1];
-    var days = (new Date(last.timestamp) - new Date(first.timestamp)) / 86400000;
-    var totalChange = last.memberCount - first.memberCount;
-    var perDay = days > 0 ? totalChange / days : 0;
-    var changeEl = el("stat-change");
-    changeEl.textContent = (perDay >= 0 ? "+" : "") + perDay.toFixed(1) + "/day";
-    changeEl.style.color = perDay >= 0 ? "#3fb950" : "#f85149";
-    if (history.length >= 2) {
-      var lastDelta = history[history.length - 1].memberCount - history[history.length - 2].memberCount;
-      changeEl.title = "Last interval: " + (lastDelta >= 0 ? "+" : "") + lastDelta;
-    }
+    var days = (new Date(latest.timestamp) - new Date(first.timestamp)) / 86400000;
+    var perDay = days > 0 ? (latest.memberCount - first.memberCount) / days : 0;
+    var ce = el("stat-change");
+    ce.textContent = (perDay >= 0 ? "+" : "") + perDay.toFixed(0) + "/day";
+    ce.style.color = perDay >= 0 ? "#3fb950" : "#f85149";
 
-    // linear regression for forecast
     var reg = linReg(history.map(function (p) { return p.memberCount; }));
-    // forecast 7 days ahead: extend by 168 hours
-    // reg.slope is per-poll interval; convert to per-hour
-    var avgHoursPerPoll = days * 24 / (history.length - 1);
-    if (!isFinite(avgHoursPerPoll) || avgHoursPerPoll <= 0) avgHoursPerPoll = 1 / 6; // fallback 10 min
-    var slopePerHour = reg.slope / avgHoursPerPoll;
-
-    var lastCount = last.memberCount;
-    var forecast7 = Math.round(lastCount + slopePerHour * 24 * 7);
+    var avgMs = (new Date(latest.timestamp) - new Date(first.timestamp)) / (history.length - 1);
+    if (!isFinite(avgMs) || avgMs <= 0) avgMs = 10 * 60 * 1000;
+    // slope is per-poll, convert to per-day for forecast
+    var slopePerDay = reg.slope * (86400000 / avgMs);
+    var forecast7 = Math.round(latest.memberCount + slopePerDay * 7);
     el("stat-forecast").textContent = fmt(forecast7);
 
-    var r2El = document.getElementById("chart-note");
-    if (r2El) r2El.textContent = "Trend: " + (perDay >= 0 ? "growing" : "shrinking") + " ~" + Math.abs(perDay).toFixed(1) + "/day  \u00b7  R\u00b2 " + reg.r2.toFixed(3) + (reg.r2 < 0.5 ? " (noisy)" : "");
+    el("chart-note").textContent =
+      (perDay >= 0 ? "Growing" : "Shrinking") + " ~" + Math.abs(perDay).toFixed(0) + "/day \u00b7 " +
+      history.length + " polls \u00b7 R\u00b2 " + reg.r2.toFixed(3);
 
     drawMain(history, reg);
     drawGrowth(history);
   }
 
-  function linReg(values) {
-    var n = values.length;
-    var sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
-    for (var i = 0; i < n; i++) { sumX += i; sumY += values[i]; sumXY += i * values[i]; sumXX += i * i; }
-    var denom = n * sumXX - sumX * sumX;
-    var slope = denom === 0 ? 0 : (n * sumXY - sumX * sumY) / denom;
-    var intercept = (sumY - slope * sumX) / n;
-    var mean = sumY / n;
-    var ssRes = 0, ssTot = 0;
-    for (var j = 0; j < n; j++) {
-      var pred = slope * j + intercept;
-      ssRes += (values[j] - pred) * (values[j] - pred);
-      ssTot += (values[j] - mean) * (values[j] - mean);
-    }
-    var r2 = ssTot === 0 ? 1 : 1 - ssRes / ssTot;
-    return { slope: slope, intercept: intercept, r2: r2 };
+  function linReg(vals) {
+    var n = vals.length, sx = 0, sy = 0, sxy = 0, sxx = 0;
+    for (var i = 0; i < n; i++) { sx += i; sy += vals[i]; sxy += i * vals[i]; sxx += i * i; }
+    var denom = n * sxx - sx * sx;
+    var slope = denom === 0 ? 0 : (n * sxy - sx * sy) / denom;
+    var intercept = (sy - slope * sx) / n;
+    var mean = sy / n, ssRes = 0, ssTot = 0;
+    for (var j = 0; j < n; j++) { var p = slope * j + intercept; ssRes += (vals[j] - p) * (vals[j] - p); ssTot += (vals[j] - mean) * (vals[j] - mean); }
+    return { slope: slope, intercept: intercept, r2: ssTot === 0 ? 1 : 1 - ssRes / ssTot };
   }
 
   function drawMain(history, reg) {
-    var canvas = el("mainChart");
-    if (!canvas) return;
-    if (mainChart) { try { mainChart.destroy(); } catch (_) {} }
+    var c = el("mainChart"); if (!c) return;
+    if (mainChart) try { mainChart.destroy(); } catch (_) {}
 
-    var labels = history.map(function (p) { return shortDate(p.timestamp); });
+    // build labels: only real points, plus 7 forecast points (one per day)
+    var labels = history.map(function (p) {
+      var d = new Date(p.timestamp);
+      return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " " + d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+    });
     var actual = history.map(function (p) { return p.memberCount; });
 
     var datasets = [{
       label: "Members",
       data: actual,
       borderColor: "#5865F2",
-      backgroundColor: "rgba(88,101,242,0.08)",
-      fill: true,
-      tension: 0.35,
-      pointRadius: history.length < 80 ? 3 : 0,
-      pointBackgroundColor: "#5865F2",
-      borderWidth: 2
+      backgroundColor: "rgba(88,101,242,0.09)",
+      fill: true, tension: 0.3, pointRadius: 4, pointBackgroundColor: "#5865F2", borderWidth: 2
     }];
 
-    if (reg && history.length >= 2) {
-      // build forecast labels and data
+    if (reg) {
       var lastTs = new Date(history[history.length - 1].timestamp).getTime();
       var avgMs = (lastTs - new Date(history[0].timestamp).getTime()) / (history.length - 1);
-      if (!isFinite(avgMs) || avgMs <= 0) avgMs = 10 * 60 * 1000;
-      var forecastLabels = [];
-      var forecastData = [];
-      // pad with nulls to align, last actual point connects
-      for (var i = 0; i < history.length - 1; i++) forecastData.push(null);
-      forecastData.push(actual[actual.length - 1]);
-      for (var k = 1; k <= FORECAST_POINTS; k++) {
-        var t = lastTs + (k * 24 * 7 * 3600000 / FORECAST_POINTS);
-        forecastLabels.push(
-          new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" })
-        );
-        forecastData.push(Math.round(reg.slope * (history.length - 1 + k * (24*7*3600000/FORECAST_POINTS)/avgMs) + reg.intercept));
-        labels.push(forecastLabels[forecastLabels.length - 1]);
-      }
-      // extend labels array was already mutated; need to keep original labels length
-      // Instead rebuild properly:
-      var allLabels = history.map(function (p) { return shortDate(p.timestamp); });
-      var fData = new Array(history.length - 1).fill(null);
+      var fLabels = [], fData = new Array(history.length - 1).fill(null);
       fData.push(actual[actual.length - 1]);
-      for (var f = 1; f <= FORECAST_POINTS; f++) {
-        var ft = lastTs + f * 24 * 7 * 3600000 / FORECAST_POINTS;
-        allLabels.push(new Date(ft).toLocaleDateString("en-US", { month: "short", day: "numeric" }));
-        fData.push(Math.round(reg.slope * (history.length - 1 + f * (24*7*3600000/FORECAST_POINTS)/avgMs) + reg.intercept));
+      for (var d = 1; d <= 7; d++) {
+        var t = new Date(lastTs + d * 86400000);
+        fLabels.push(t.toLocaleDateString("en-US", { month: "short", day: "numeric" }));
+        fData.push(Math.round(reg.slope * (history.length - 1 + d * 86400000 / avgMs) + reg.intercept));
       }
-      labels = allLabels;
+      // new labels = history labels + forecast day labels
+      var allLabels = labels.concat(fLabels);
+      // pad actual with nulls
+      var actualPadded = actual.concat(new Array(7).fill(null));
       datasets = [
         {
           label: "Members",
-          data: (function () {
-            var d = actual.slice();
-            for (var p = 0; p < FORECAST_POINTS; p++) d.push(null);
-            return d;
-          })(),
+          data: actualPadded,
           borderColor: "#5865F2",
-          backgroundColor: "rgba(88,101,242,0.08)",
-          fill: true,
-          tension: 0.35,
-          pointRadius: history.length < 80 ? 3 : 0,
-          pointBackgroundColor: "#5865F2",
-          borderWidth: 2
+          backgroundColor: "rgba(88,101,242,0.09)",
+          fill: true, tension: 0.3, pointRadius: 4, pointBackgroundColor: "#5865F2", borderWidth: 2
         },
         {
           label: "Forecast",
-          data: fData,
-          borderColor: "rgba(63,185,80,0.9)",
-          backgroundColor: "transparent",
-          borderDash: [6, 4],
-          fill: false,
-          tension: 0.35,
-          pointRadius: 0,
-          borderWidth: 2,
-          spanGaps: true
+          data: fData.concat(fData.length < allLabels.length ? new Array(allLabels.length - fData.length).fill(null) : []),
+          borderColor: "rgba(63,185,80,0.9)", borderDash: [6, 4], backgroundColor: "transparent",
+          fill: false, tension: 0.3, pointRadius: 0, borderWidth: 2, spanGaps: true
         }
       ];
+      // fix fData length to match allLabels
+      while (fData.length < allLabels.length) fData.push(null);
+      datasets[1].data = fData;
+      labels = allLabels;
     }
 
-    mainChart = new Chart(canvas.getContext("2d"), {
+    // compute sane Y range so data isn't crushed at top/bottom
+    var allVals = actual.concat(reg ? datasets[1].data.filter(function (v) { return v != null; }) : []);
+    var vMin = Math.min.apply(null, allVals), vMax = Math.max.apply(null, allVals);
+    var pad = Math.max(200, (vMax - vMin) * 0.25);
+    var yMin = Math.floor((vMin - pad) / 100) * 100;
+    var yMax = Math.ceil((vMax + pad) / 100) * 100;
+
+    mainChart = new Chart(c.getContext("2d"), {
       type: "line",
       data: { labels: labels, datasets: datasets },
       options: {
         responsive: true, maintainAspectRatio: false,
+        layout: { padding: { left: 8, right: 12 } },
         interaction: { mode: "index", intersect: false },
         plugins: {
           legend: { display: false },
@@ -188,39 +143,50 @@
           }
         },
         scales: {
-          x: { ticks: { color: "#52525b", maxTicksLimit: 9, font: { size: 10, family: "JetBrains Mono" }, maxRotation: 0 }, grid: { color: "rgba(30,30,30,0.9)" } },
-          y: { ticks: { color: "#71717a", font: { size: 10, family: "JetBrains Mono" }, callback: function (v) { return fmt(v); } }, grid: { color: "rgba(30,30,30,0.9)" } }
+          x: {
+            ticks: { color: "#52525b", maxTicksLimit: 8, font: { size: 10, family: "JetBrains Mono" }, maxRotation: 0, autoSkip: true },
+            grid: { color: "rgba(30,30,30,0.9)" }
+          },
+          y: {
+            min: yMin, max: yMax,
+            ticks: { color: "#71717a", font: { size: 10, family: "JetBrains Mono" }, callback: function (v) { return fmt(v); } },
+            grid: { color: "rgba(30,30,30,0.9)" }
+          }
         }
       }
     });
   }
 
   function drawGrowth(history) {
-    var canvas = el("growthChart");
-    if (!canvas) return;
-    if (growthChart) { try { growthChart.destroy(); } catch (_) {} }
+    var c = el("growthChart"); if (!c) return;
+    if (growthChart) try { growthChart.destroy(); } catch (_) {}
     if (history.length < 2) {
-      growthChart = new Chart(canvas.getContext("2d"), {
+      growthChart = new Chart(c.getContext("2d"), {
         type: "bar",
         data: { labels: [], datasets: [{ data: [] }] },
         options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
       });
       return;
     }
-    var labels = [];
-    var deltas = [];
+    var labels = [], deltas = [];
     for (var i = 1; i < history.length; i++) {
-      labels.push(shortDate(history[i].timestamp));
+      var d = new Date(history[i].timestamp);
+      labels.push(d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " " + d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }));
       deltas.push(history[i].memberCount - history[i - 1].memberCount);
     }
-    growthChart = new Chart(canvas.getContext("2d"), {
+    var maxAbs = Math.max.apply(null, deltas.map(function (v) { return Math.abs(v); }));
+    var yPad = Math.max(10, Math.ceil(maxAbs * 0.3));
+    var yMin = -yPad, yMax = Math.max.apply(null, deltas) + yPad;
+    if (Math.min.apply(null, deltas) >= 0) yMin = 0;
+
+    growthChart = new Chart(c.getContext("2d"), {
       type: "bar",
       data: {
         labels: labels,
         datasets: [{
           label: "Change",
           data: deltas,
-          backgroundColor: deltas.map(function (v) { return v >= 0 ? "rgba(63,185,80,0.7)" : "rgba(248,81,73,0.7)"; }),
+          backgroundColor: deltas.map(function (v) { return v >= 0 ? "rgba(63,185,80,0.75)" : "rgba(248,81,73,0.75)"; }),
           borderColor: deltas.map(function (v) { return v >= 0 ? "#3fb950" : "#f85149"; }),
           borderWidth: 1, borderRadius: 3
         }]
@@ -232,15 +198,12 @@
           tooltip: { backgroundColor: "#0c0c0c", borderColor: "#1e1e1e", borderWidth: 1, callbacks: { label: function (c) { return " " + (c.parsed.y >= 0 ? "+" : "") + c.parsed.y; } } }
         },
         scales: {
-          x: { ticks: { color: "#52525b", maxTicksLimit: 10, font: { size: 10, family: "JetBrains Mono" }, maxRotation: 0 }, grid: { display: false } },
-          y: { ticks: { color: "#71717a", font: { size: 10, family: "JetBrains Mono" }, callback: function (v) { return (v > 0 ? "+" : "") + v; } }, grid: { color: "rgba(30,30,30,0.9)" } }
+          x: { ticks: { color: "#52525b", maxTicksLimit: 8, font: { size: 10, family: "JetBrains Mono" }, maxRotation: 0, autoSkip: true }, grid: { display: false } },
+          y: { min: yMin, max: yMax, ticks: { color: "#71717a", font: { size: 10, family: "JetBrains Mono" }, callback: function (v) { return (v > 0 ? "+" : "") + v; } }, grid: { color: "rgba(30,30,30,0.9)" } }
         }
       }
     });
   }
 
-  document.addEventListener("DOMContentLoaded", function () {
-    fetchData();
-    setInterval(fetchData, 5 * 60 * 1000);
-  });
+  document.addEventListener("DOMContentLoaded", function () { fetchData(); setInterval(fetchData, 5 * 60 * 1000); });
 })();
