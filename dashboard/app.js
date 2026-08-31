@@ -21,16 +21,11 @@
         return r.json();
       })
       .then(buildDashboard)
-      .catch(function (err) {
-        console.error("Failed to load data:", err);
-      });
+      .catch(function (err) { console.error("Fetch error:", err); });
   }
 
   function buildDashboard(history) {
-    if (!history || history.length < 1) {
-      renderEmpty();
-      return;
-    }
+    if (!history || history.length < 1) { renderEmpty(); return; }
 
     var latest = history[history.length - 1];
     el("stat-members").textContent = fmt(latest.memberCount);
@@ -53,10 +48,10 @@
       return;
     }
 
-    var derivs = computeDerivatives(history);
     var reg = linearRegression(history);
-    var forecastTaylor = taylorForecast(history, derivs, FORECAST_HOURS);
-    var forecastLinear = linearForecast(history, reg, FORECAST_HOURS);
+    var derivs = computeDerivatives(history);
+    var taylorPts = taylorForecast(history, derivs, FORECAST_HOURS);
+    var linearPts = linearForecast(history, reg, FORECAST_HOURS);
 
     var d1El = el("stat-d1");
     d1El.textContent = sign(derivs.d1) + derivs.d1.toFixed(1) + "/hr";
@@ -70,55 +65,63 @@
     d3El.textContent = sign(derivs.d3) + derivs.d3.toFixed(3) + "/hr\u00B3";
     d3El.style.color = derivs.d3 >= 0 ? "#3fb950" : "#f85149";
 
-    var forecastVal = forecastTaylor[forecastTaylor.length - 1].y;
+    var forecastVal = taylorPts.length > 0 ? taylorPts[taylorPts.length - 1].y : latest.memberCount;
     el("stat-forecast7").textContent = fmt(forecastVal);
     el("stat-r2").textContent = reg.r2.toFixed(3);
 
-    renderMainChart(history, forecastTaylor, forecastLinear);
+    renderMainChart(history, taylorPts, linearPts);
     renderDerivativeChart(history, derivs);
   }
 
   function computeDerivatives(history) {
     var n = history.length;
-    var dt_hours = [];
+    var dts = [];
     for (var i = 1; i < n; i++) {
-      dt_hours.push((new Date(history[i].timestamp) - new Date(history[i - 1].timestamp)) / 3600000);
+      dts.push((new Date(history[i].timestamp) - new Date(history[i - 1].timestamp)) / 3600000);
     }
-    var avgDt = dt_hours.reduce(function (a, b) { return a + b; }, 0) / dt_hours.length;
+    var avgDt = dts.reduce(function (a, b) { return a + b; }, 0) / dts.length;
     if (avgDt <= 0) avgDt = 1;
 
-    var velocities = [];
+    var vels = [];
     for (var j = 1; j < n; j++) {
-      velocities.push((history[j].memberCount - history[j - 1].memberCount) / avgDt);
+      vels.push((history[j].memberCount - history[j - 1].memberCount) / avgDt);
     }
 
-    var d1 = velocities.length > 0 ? velocities[velocities.length - 1] : 0;
-
-    var accelerations = [];
-    for (var k = 1; k < velocities.length; k++) {
-      accelerations.push((velocities[k] - velocities[k - 1]) / avgDt);
+    var accels = [];
+    for (var k = 1; k < vels.length; k++) {
+      accels.push((vels[k] - vels[k - 1]) / avgDt);
     }
-    var d2 = accelerations.length > 0 ? accelerations[accelerations.length - 1] : 0;
 
     var jerks = [];
-    for (var l = 1; l < accelerations.length; l++) {
-      jerks.push((accelerations[l] - accelerations[l - 1]) / avgDt);
+    for (var l = 1; l < accels.length; l++) {
+      jerks.push((accels[l] - accels[l - 1]) / avgDt);
     }
+
+    var d1 = vels.length > 0 ? vels[vels.length - 1] : 0;
+    var d2 = accels.length > 0 ? accels[accels.length - 1] : 0;
     var d3 = jerks.length > 0 ? jerks[jerks.length - 1] : 0;
 
     if (n >= 4) {
-      var vreg = linearRegressionValues(velocities);
-      d1 = vreg.slope !== 0 ? vreg.slope * (velocities.length) + vreg.intercept : d1;
-      if (accelerations.length >= 2) {
-        var areg = linearRegressionValues(accelerations);
-        d2 = areg.slope !== 0 ? areg.slope * (accelerations.length) + areg.intercept : d2;
+      var vreg = simpleLinReg(vels);
+      if (Math.abs(vreg.slope) > 0.001) {
+        d1 = vreg.slope * vels.length + vreg.intercept;
+      }
+      if (accels.length >= 2) {
+        var areg = simpleLinReg(accels);
+        if (Math.abs(areg.slope) > 0.001) {
+          d2 = areg.slope * accels.length + areg.intercept;
+        }
+      }
+      if (jerks.length >= 2) {
+        var jreg = simpleLinReg(jerks);
+        d3 = jreg.slope * jerks.length + jreg.intercept;
       }
     }
 
-    return { d1: d1, d2: d2, d3: d3, avgDt: avgDt, velocities: velocities, accelerations: accelerations, jerks: jerks };
+    return { d1: d1, d2: d2, d3: d3, avgDt: avgDt, vels: vels, accels: accels, jerks: jerks };
   }
 
-  function linearRegressionValues(arr) {
+  function simpleLinReg(arr) {
     var n = arr.length;
     if (n < 2) return { slope: 0, intercept: arr[0] || 0 };
     var sx = 0, sy = 0, sxy = 0, sxx = 0;
@@ -134,7 +137,6 @@
   function linearRegression(data) {
     var n = data.length;
     if (n < 2) return { slope: 0, intercept: data[0] ? data[0].memberCount : 0, r2: 0 };
-
     var sx = 0, sy = 0, sxy = 0, sxx = 0;
     for (var i = 0; i < n; i++) {
       var y = data[i].memberCount;
@@ -143,7 +145,6 @@
     var denom = n * sxx - sx * sx;
     var slope = denom !== 0 ? (n * sxy - sx * sy) / denom : 0;
     var intercept = (sy - slope * sx) / n;
-
     var yMean = sy / n;
     var ssRes = 0, ssTot = 0;
     for (var j = 0; j < n; j++) {
@@ -160,14 +161,13 @@
     var v = derivs.d1;
     var a = derivs.d2;
     var j = derivs.d3;
-    var points = [];
+    var pts = [];
     for (var h = 1; h <= hoursAhead; h++) {
       var t = h;
-      var predicted = y0 + v * t + 0.5 * a * t * t + (1.0 / 6.0) * j * t * t * t;
-      var date = new Date(lastTs + h * 3600000);
-      points.push({ x: date.toISOString(), y: Math.max(0, Math.round(predicted)) });
+      var pred = y0 + v * t + 0.5 * a * t * t + (1.0 / 6.0) * j * t * t * t;
+      pts.push({ x: new Date(lastTs + h * 3600000), y: Math.max(0, Math.round(pred)) });
     }
-    return points;
+    return pts;
   }
 
   function linearForecast(history, reg, hoursAhead) {
@@ -175,90 +175,86 @@
     var lastTs = new Date(history[n - 1].timestamp).getTime();
     var intervalMs = n > 1 ? (lastTs - new Date(history[0].timestamp).getTime()) / (n - 1) : 600000;
     var intervalMinutes = intervalMs / 60000;
-    var points = [];
+    var pts = [];
     for (var h = 1; h <= hoursAhead; h++) {
       var idx = n - 1 + (h * 60) / intervalMinutes;
-      var predicted = Math.max(0, Math.round(reg.slope * idx + reg.intercept));
-      var date = new Date(lastTs + h * 3600000);
-      points.push({ x: date.toISOString(), y: predicted });
+      var pred = Math.max(0, Math.round(reg.slope * idx + reg.intercept));
+      pts.push({ x: new Date(lastTs + h * 3600000), y: pred });
     }
-    return points;
+    return pts;
   }
 
-  function renderMainChart(history, taylorForecast, linearForecast) {
+  function renderMainChart(history, taylorPts, linearPts) {
     if (mainChartInstance) mainChartInstance.destroy();
     var ctx = el("mainChart");
     if (!ctx) return;
 
-    var historical = history.map(function (p) { return { x: p.timestamp, y: p.memberCount }; });
-    var maxLen = Math.max(historical.length, taylorForecast.length, linearForecast.length);
-    var allLabels = historical.map(function (p) { return p.x; });
-    for (var i = allLabels.length; i < taylorForecast.length; i++) {
-      allLabels.push(taylorForecast[i].x);
-    }
+    var actualPts = history.map(function (p) {
+      return { x: new Date(p.timestamp), y: p.memberCount };
+    });
 
-    var taylorData = [];
-    for (var t = 0; t < allLabels.length; t++) {
-      if (t < historical.length) {
-        taylorData.push(historical[t].y);
-      } else {
-        taylorData.push(taylorForecast[t - historical.length] ? taylorForecast[t - historical.length].y : null);
-      }
-    }
+    var forecastStartIdx = actualPts.length - 1;
 
-    var linearData = [];
-    for (var l = 0; l < allLabels.length; l++) {
-      if (l < historical.length) {
-        linearData.push(historical[l].y);
-      } else {
-        linearData.push(linearForecast[l - historical.length] ? linearForecast[l - historical.length].y : null);
-      }
+    var taylorActual = actualPts.slice();
+    var taylorForecast = [];
+    for (var i = 0; i < forecastStartIdx; i++) {
+      taylorForecast.push({ x: actualPts[i].x, y: null });
     }
+    taylorForecast.push({ x: actualPts[forecastStartIdx].x, y: actualPts[forecastStartIdx].y });
+    taylorPts.forEach(function (p) { taylorForecast.push(p); });
 
-    var forecastStart = historical.length - 1;
+    var linearActual = actualPts.slice();
+    var linearForecast = [];
+    for (var j = 0; j < forecastStartIdx; j++) {
+      linearForecast.push({ x: actualPts[j].x, y: null });
+    }
+    linearForecast.push({ x: actualPts[forecastStartIdx].x, y: actualPts[forecastStartIdx].y });
+    linearPts.forEach(function (p) { linearForecast.push(p); });
 
     mainChartInstance = new Chart(ctx.getContext("2d"), {
       type: "line",
       data: {
-        labels: allLabels,
         datasets: [
           {
-            label: "Actual + Forecast",
-            data: taylorData,
+            label: "Actual",
+            data: actualPts,
+            borderColor: "rgba(88, 101, 242, 0.9)",
+            backgroundColor: "rgba(88, 101, 242, 0.06)",
+            fill: true,
+            tension: 0.3,
+            pointRadius: actualPts.length < 50 ? 3 : 0,
+            pointBackgroundColor: "rgba(88, 101, 242, 1)",
+            pointHitRadius: 10,
+            borderWidth: 2,
+            spanGaps: false
+          },
+          {
+            label: "3rd-Order Forecast",
+            data: taylorForecast,
+            borderColor: "rgba(63, 185, 80, 0.7)",
+            backgroundColor: "rgba(63, 185, 80, 0.03)",
             fill: true,
             tension: 0.3,
             pointRadius: 0,
-            pointHitRadius: 10,
             borderWidth: 2,
-            segment: {
-              borderColor: function (c) {
-                return c.p0DataIndex >= forecastStart ? "rgba(63, 185, 80, 0.7)" : "rgba(88, 101, 242, 0.9)";
-              },
-              borderDash: function (c) {
-                return c.p0DataIndex >= forecastStart ? [6, 4] : [];
-              },
-              backgroundColor: function (c) {
-                return c.p0DataIndex >= forecastStart ? "rgba(63, 185, 80, 0.04)" : "rgba(88, 101, 242, 0.06)";
-              }
-            }
+            borderDash: [6, 4],
+            spanGaps: true
           },
           {
             label: "Linear Forecast",
-            data: linearData,
+            data: linearForecast,
+            borderColor: "rgba(88, 101, 242, 0.3)",
+            backgroundColor: "transparent",
             fill: false,
             tension: 0.3,
             pointRadius: 0,
             borderWidth: 1,
             borderDash: [4, 4],
-            segment: {
-              borderColor: function (c) {
-                return c.p0DataIndex >= forecastStart ? "rgba(88, 101, 242, 0.3)" : "transparent";
-              }
-            }
+            spanGaps: true
           }
         ]
       },
-      options: chartOptions(function (v) { return fmt(v); })
+      options: makeChartOptions(function (v) { return fmt(v); })
     });
   }
 
@@ -267,65 +263,68 @@
     var ctx = el("rateChart");
     if (!ctx) return;
 
-    var labels = [];
-    for (var i = 1; i < history.length; i++) {
-      var ts = new Date(history[i].timestamp);
-      labels.push(ts.toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }));
-    }
+    var ts0 = new Date(history[0].timestamp).getTime();
+    var avgMs = derivs.avgDt * 3600000;
 
-    var d1Data = derivs.velocities.map(function (v) { return Math.round(v * 100) / 100; });
-    var d2Data = derivs.accelerations.map(function (a) { return Math.round(a * 10000) / 10000; });
-    var d3Data = derivs.jerks.map(function (j) { return Math.round(j * 1000000) / 1000000; });
+    var vData = derivs.vels.map(function (v, i) {
+      return { x: new Date(ts0 + (i + 1) * avgMs), y: Math.round(v * 100) / 100 };
+    });
+    var aData = derivs.accels.map(function (a, i) {
+      return { x: new Date(ts0 + (i + 1.5) * avgMs), y: Math.round(a * 10000) / 10000 };
+    });
+    var jData = derivs.jerks.map(function (j, i) {
+      return { x: new Date(ts0 + (i + 2) * avgMs), y: Math.round(j * 1000000) / 1000000 };
+    });
 
     rateChartInstance = new Chart(ctx.getContext("2d"), {
       type: "line",
       data: {
-        labels: labels,
         datasets: [
           {
             label: "Velocity (1st)",
-            data: d1Data,
+            data: vData,
             borderColor: "rgba(63, 185, 80, 0.9)",
             backgroundColor: "rgba(63, 185, 80, 0.1)",
             fill: true,
             tension: 0.3,
-            pointRadius: 3,
+            pointRadius: 4,
             pointBackgroundColor: "rgba(63, 185, 80, 1)",
             borderWidth: 2
           },
           {
             label: "Acceleration (2nd)",
-            data: d2Data,
+            data: aData,
             borderColor: "rgba(240, 136, 62, 0.9)",
             backgroundColor: "rgba(240, 136, 62, 0.05)",
             fill: true,
             tension: 0.3,
-            pointRadius: 3,
+            pointRadius: 4,
             pointBackgroundColor: "rgba(240, 136, 62, 1)",
             borderWidth: 2
           },
           {
             label: "Jerk (3rd)",
-            data: d3Data,
+            data: jData,
             borderColor: "rgba(248, 81, 73, 0.9)",
             backgroundColor: "rgba(248, 81, 73, 0.05)",
             fill: true,
             tension: 0.3,
-            pointRadius: 3,
+            pointRadius: 4,
             pointBackgroundColor: "rgba(248, 81, 73, 1)",
             borderWidth: 2
           }
         ]
       },
-      options: chartOptions(function (v) { return sign(v) + v.toFixed(2); })
+      options: makeChartOptions(function (v) { return sign(v) + v.toFixed(2); })
     });
   }
 
-  function chartOptions(tickCallback) {
+  function makeChartOptions(tickCb) {
     return {
       responsive: true,
       maintainAspectRatio: false,
-      interaction: { mode: "index", intersect: false },
+      animation: { duration: 600 },
+      interaction: { mode: "nearest", intersect: false },
       plugins: {
         legend: { display: false },
         tooltip: {
@@ -340,12 +339,12 @@
           callbacks: {
             title: function (items) {
               if (!items.length) return "";
-              var d = new Date(items[0].label);
+              var d = new Date(items[0].parsed.x);
               return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) +
                 " " + d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
             },
             label: function (ctx) {
-              return ctx.dataset.label + ": " + fmt(ctx.parsed.y);
+              return " " + ctx.dataset.label + ": " + fmt(ctx.parsed.y);
             }
           }
         }
@@ -355,7 +354,7 @@
           type: "time",
           time: {
             tooltipFormat: "MMM d, yyyy HH:mm",
-            displayFormats: { hour: "MMM d HH:mm", day: "MMM d" }
+            displayFormats: { minute: "MMM d HH:mm", hour: "MMM d HH:mm", day: "MMM d" }
           },
           ticks: { color: "#3f3f46", maxTicksLimit: 8, font: { family: "'JetBrains Mono', monospace", size: 10 } },
           grid: { color: "rgba(26, 26, 26, 0.8)" },
@@ -364,7 +363,7 @@
         y: {
           ticks: {
             color: "#3f3f46",
-            callback: tickCallback,
+            callback: tickCb,
             font: { family: "'JetBrains Mono', monospace", size: 10 },
             maxTicksLimit: 6
           },
