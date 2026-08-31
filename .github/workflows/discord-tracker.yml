@@ -1,0 +1,52 @@
+name: discord-tracker
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch Discord invite data
+        id: fetch
+        run: |
+          set -euo pipefail
+          HTTP_CODE=$(curl -s -o /tmp/discord_response.json -w "%{http_code}" -A "Mozilla/5.0" "https://discord.com/api/v10/invites/F6AUTeWJHM")
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Discord API returned HTTP $HTTP_CODE"
+            exit 1
+          fi
+          python3 -c "
+          import json, sys, datetime
+          with open('/tmp/discord_response.json') as f:
+              data = json.load(f)
+          profile = data['profile']
+          entry = {
+              'timestamp': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+              'memberCount': profile['member_count'],
+              'onlineCount': profile['online_count']
+          }
+          with open('dashboard/data/members.json') as f:
+              history = json.load(f)
+          history.append(entry)
+          with open('dashboard/data/members.json', 'w') as f:
+              json.dump(history, f, indent=2)
+          print('memberCount=' + str(entry['memberCount']))
+          print('onlineCount=' + str(entry['onlineCount']))
+          print('timestamp=' + entry['timestamp'])
+          "
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dashboard/data/members.json
+          git diff --cached --quiet && echo "No changes to commit" || git commit -m "Update Discord member count"
+          git push
