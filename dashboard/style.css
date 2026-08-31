@@ -164,10 +164,18 @@ body {
   border: 1px solid rgba(63, 63, 70, 0.6);
 }
 
+.chart-badges { display: flex; gap: 0.375rem; }
+
 .chart-badge.green {
   background: rgba(2, 44, 34, 0.6);
   color: var(--green);
   border-color: rgba(6, 78, 59, 0.6);
+}
+
+.chart-badge.blue {
+  background: rgba(30, 30, 80, 0.6);
+  color: var(--accent);
+  border-color: rgba(88, 101, 242, 0.3);
 }
 
 /* ── Legend ────────────────────────────────── */

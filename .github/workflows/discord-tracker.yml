@@ -4,6 +4,17 @@ on:
   schedule:
     - cron: "*/10 * * * *"
   workflow_dispatch:
+    inputs:
+      backfill:
+        description: "Backfill N data points (15s intervals)"
+        required: false
+        type: boolean
+        default: false
+      count:
+        description: "Number of backfill points"
+        required: false
+        type: number
+        default: 20
 
 permissions:
   contents: write
@@ -15,33 +26,45 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Fetch Discord invite data
-        id: fetch
         run: |
           set -euo pipefail
-          HTTP_CODE=$(curl -s -o /tmp/discord_response.json -w "%{http_code}" -A "Mozilla/5.0" "https://discord.com/api/v10/invites/F6AUTeWJHM")
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "::error::Discord API returned HTTP $HTTP_CODE"
-            exit 1
-          fi
-          python3 -c "
-          import json, sys, datetime
-          with open('/tmp/discord_response.json') as f:
-              data = json.load(f)
-          profile = data['profile']
-          entry = {
-              'timestamp': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
-              'memberCount': profile['member_count'],
-              'onlineCount': profile['online_count']
-          }
-          with open('dashboard/data/members.json') as f:
+          python3 << 'PYEOF'
+          import json, datetime, urllib.request, time, os, sys
+
+          BACKFILL = "${{ inputs.backfill }}" == "true"
+          COUNT = int("${{ inputs.count }}" or "20") if BACKFILL else 1
+          URL = "https://discord.com/api/v10/invites/F6AUTeWJHM"
+
+          with open("dashboard/data/members.json") as f:
               history = json.load(f)
-          history.append(entry)
-          with open('dashboard/data/members.json', 'w') as f:
+
+          fetched = 0
+          for i in range(COUNT):
+              if i > 0:
+                  time.sleep(15)
+              try:
+                  req = urllib.request.Request(URL, headers={"User-Agent": "Mozilla/5.0"})
+                  resp = urllib.request.urlopen(req, timeout=10)
+                  data = json.loads(resp.read())
+                  profile = data["profile"]
+                  entry = {
+                      "timestamp": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                      "memberCount": profile["member_count"],
+                      "onlineCount": profile["online_count"]
+                  }
+                  history.append(entry)
+                  fetched += 1
+                  print(f"Point {i+1}/{COUNT}: {entry['memberCount']} members, {entry['onlineCount']} online")
+              except Exception as e:
+                  print(f"Point {i+1} failed: {e}", file=sys.stderr)
+                  if not BACKFILL:
+                      sys.exit(1)
+
+          with open("dashboard/data/members.json", "w") as f:
               json.dump(history, f, indent=2)
-          print('memberCount=' + str(entry['memberCount']))
-          print('onlineCount=' + str(entry['onlineCount']))
-          print('timestamp=' + entry['timestamp'])
-          "
+
+          print(f"Total points: {len(history)}, fetched this run: {fetched}")
+          PYEOF
 
       - name: Commit and push
         run: |
