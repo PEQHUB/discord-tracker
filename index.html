@@ -17,7 +17,7 @@
       <div class="header-row">
         <div>
           <h1>RenoDX <span class="accent">Discord</span> Tracker</h1>
-          <p class="subtitle">Member count, rate of change, and 7-day forecast</p>
+          <p class="subtitle">Member count, derivatives, and 7-day forecast</p>
         </div>
         <div class="live-badge">
           <span class="live-dot"></span>
@@ -36,16 +36,20 @@
         <span class="stat-value mono" id="stat-online">&mdash;</span>
       </div>
       <div class="stat-segment border-r">
-        <span class="stat-label">GROWTH / DAY</span>
-        <span class="stat-value mono" id="stat-growth">&mdash;</span>
+        <span class="stat-label">1ST DERIV (VELOCITY)</span>
+        <span class="stat-value mono" id="stat-d1">&mdash;</span>
+      </div>
+      <div class="stat-segment border-r">
+        <span class="stat-label">2ND DERIV (ACCEL)</span>
+        <span class="stat-value mono" id="stat-d2">&mdash;</span>
+      </div>
+      <div class="stat-segment border-r">
+        <span class="stat-label">3RD DERIV (JERK)</span>
+        <span class="stat-value mono" id="stat-d3">&mdash;</span>
       </div>
       <div class="stat-segment border-r">
         <span class="stat-label">7-DAY FORECAST</span>
         <span class="stat-value mono" id="stat-forecast7">&mdash;</span>
-      </div>
-      <div class="stat-segment border-r">
-        <span class="stat-label">30-DAY FORECAST</span>
-        <span class="stat-value mono" id="stat-forecast30">&mdash;</span>
       </div>
       <div class="stat-segment">
         <span class="stat-label">R&sup2;</span>
@@ -56,11 +60,15 @@
     <section class="chart-panel">
       <div class="chart-header">
         <h2>Member Count</h2>
-        <span class="chart-badge green">7-Day Forecast</span>
+        <div class="chart-badges">
+          <span class="chart-badge green">Taylor 3rd-Order</span>
+          <span class="chart-badge blue">Linear</span>
+        </div>
       </div>
       <div class="legend">
         <div class="legend-item"><span class="legend-dot" style="background:#5865F2"></span> Actual</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#3fb950"></span> Forecast</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#3fb950"></span> 3rd-Order Forecast</div>
+        <div class="legend-item"><span class="legend-dot" style="background:rgba(88,101,242,0.4)"></span> Linear Forecast</div>
       </div>
       <div class="chart-body">
         <canvas id="mainChart"></canvas>
@@ -69,8 +77,13 @@
 
     <section class="chart-panel">
       <div class="chart-header">
-        <h2>Daily Growth</h2>
+        <h2>Derivatives</h2>
         <span class="chart-badge">Rate of Change</span>
+      </div>
+      <div class="legend">
+        <div class="legend-item"><span class="legend-dot" style="background:#3fb950"></span> 1st (Velocity)</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#f0883e"></span> 2nd (Acceleration)</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#f85149"></span> 3rd (Jerk)</div>
       </div>
       <div class="chart-body chart-body-sm">
         <canvas id="rateChart"></canvas>
