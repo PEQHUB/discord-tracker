@@ -43,3 +43,12 @@ jobs:
           git add dashboard/data/members.json
           git diff --cached --quiet && echo "No changes to commit" || git commit -m "Update Discord member count"
           git push
+
+      - name: Deploy to GitHub Pages
+        if: always()
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dashboard
+          publish_branch: gh-pages
+          keep_files: false

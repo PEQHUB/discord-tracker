@@ -6,6 +6,10 @@ on:
     paths:
       - "dashboard/**"
   workflow_dispatch:
+  workflow_run:
+    workflows: ["discord-tracker"]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: write
