@@ -39,12 +39,21 @@
     ce.textContent = (perDay >= 0 ? "+" : "") + perDay.toFixed(0) + "/day";
     ce.style.color = perDay >= 0 ? "#3fb950" : "#f85149";
 
-    var reg = timeReg(history); // time-based regression
-    var forecast7 = Math.round(reg.slope * (reg.tLast + 24 * 7) + reg.intercept);
+    var model = fitLogistic(history) || timeReg(history); // logistic fit, linear fallback
+    var tLast = model.tLast, yLast = latest.memberCount;
+    var forecast7 = Math.round(yLast + model.yAt(tLast + 24 * 7) - model.yAt(tLast));
     el("stat-forecast").textContent = fmt(forecast7);
-    el("chart-note").textContent = "Trend " + (perDay >= 0 ? "+" : "") + perDay.toFixed(0) + "/day \u00b7 " + history.length + " polls \u00b7 R\u00b2 " + reg.r2.toFixed(3);
+    if (model.kind === "logistic") {
+      var nowDay = model.yAt(tLast + 24) - model.yAt(tLast);
+      el("chart-note").textContent = "Logistic fit \u00b7 R\u00b2 " + model.r2.toFixed(3) +
+        " \u00b7 now " + (nowDay >= 0 ? "+" : "") + Math.round(nowDay) + "/day" +
+        " \u00b7 ceiling \u2248 " + fmt(Math.round(model.L)) +
+        " \u00b7 " + history.length + " polls";
+    } else {
+      el("chart-note").textContent = "Trend " + (perDay >= 0 ? "+" : "") + perDay.toFixed(0) + "/day \u00b7 " + history.length + " polls \u00b7 R\u00b2 " + model.r2.toFixed(3);
+    }
 
-    drawMain(history, reg);
+    drawMain(history, model);
     drawGrowth(history);
   }
 
@@ -70,10 +79,81 @@
       ssTot += (pts[j].y - mean) * (pts[j].y - mean);
     }
     var tLast = pts[pts.length - 1].t;
-    return { slope: slope, intercept: intercept, r2: ssTot === 0 ? 1 : 1 - ssRes / ssTot, t0: t0, tLast: tLast };
+    return {
+      kind: "linear", slope: slope, intercept: intercept,
+      r2: ssTot === 0 ? 1 : 1 - ssRes / ssTot, t0: t0, tLast: tLast,
+      yAt: function (t) { return slope * t + intercept; }
+    };
   }
 
-  function drawMain(history, reg) {
+  // logistic curve fit: y = L / (1 + e^-(k*t + c)).
+  // Models saturating adoption: growth is proportional to remaining headroom below
+  // the ceiling L, which matches decelerating member counts far better than a line
+  // (R² 0.999 vs 0.966 on current data). For a fixed L the model is linear in
+  // logit space, so each candidate L has a closed-form least-squares solution;
+  // scan L over a log grid, then golden-section refine the best interval.
+  function fitLogistic(history) {
+    var t0 = new Date(history[0].timestamp).getTime();
+    var n = history.length, yMax = 0, pts = [], i;
+    for (i = 0; i < n; i++) {
+      var t = (new Date(history[i].timestamp).getTime() - t0) / 3600000;
+      var y = history[i].memberCount;
+      pts.push({ t: t, y: y });
+      if (y > yMax) yMax = y;
+    }
+    var mean = 0;
+    for (i = 0; i < n; i++) mean += pts[i].y;
+    mean /= n;
+    var ssTot = 0;
+    for (i = 0; i < n; i++) ssTot += (pts[i].y - mean) * (pts[i].y - mean);
+    if (ssTot === 0) return null;
+
+    function solve(L) { // closed-form logit regression at ceiling L, or null
+      var sT = 0, sZ = 0, sTZ = 0, sTT = 0, j, z;
+      for (j = 0; j < n; j++) {
+        z = Math.log(pts[j].y / (L - pts[j].y));
+        if (!isFinite(z)) return null;
+        sT += pts[j].t; sZ += z; sTZ += pts[j].t * z; sTT += pts[j].t * pts[j].t;
+      }
+      var den = n * sTT - sT * sT;
+      var k = den === 0 ? 0 : (n * sTZ - sT * sZ) / den;
+      var c = (sZ - k * sT) / n;
+      if (!isFinite(k) || !isFinite(c)) return null;
+      var sse = 0;
+      for (j = 0; j < n; j++) {
+        var f = L / (1 + Math.exp(-(k * pts[j].t + c)));
+        sse += (pts[j].y - f) * (pts[j].y - f);
+      }
+      return { k: k, c: c, sse: sse };
+    }
+
+    var GRID = 400, best = null, ratio = Math.pow(100, 1 / (GRID - 1));
+    for (var g = 0; g < GRID; g++) {
+      var L = yMax * 1.0001 * Math.pow(100, g / (GRID - 1));
+      var r = solve(L);
+      if (r && (!best || r.sse < best.sse)) best = { L: L, k: r.k, c: r.c, sse: r.sse };
+    }
+    if (!best) return null;
+    var lo = best.L / ratio, hi = best.L * ratio;
+    var gr = (Math.sqrt(5) - 1) / 2;
+    var x1 = hi - gr * (hi - lo), x2 = lo + gr * (hi - lo);
+    for (var it = 0; it < 100; it++) {
+      var s1 = solve(x1), s2 = solve(x2);
+      if (s1 && s2 && s1.sse < s2.sse) { hi = x2; x2 = x1; x1 = hi - gr * (hi - lo); }
+      else { lo = x1; x1 = x2; x2 = lo + gr * (hi - lo); }
+    }
+    var Lf = (lo + hi) / 2, rf = solve(Lf);
+    if (!rf || !isFinite(Lf)) return null;
+    return {
+      kind: "logistic", L: Lf,
+      r2: 1 - rf.sse / ssTot, t0: t0, tLast: pts[n - 1].t,
+      yAt: function (t) { return Lf / (1 + Math.exp(-(rf.k * t + rf.c))); }
+    };
+  }
+
+  function dayFloor(ms) { var d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); }
+
+  function drawMain(history, model) {
     var c = el("mainChart"); if (!c) return;
     if (mainChart) try { mainChart.destroy(); } catch (_) {}
 
@@ -95,15 +175,17 @@
       showLine: true
     }];
 
-    if (reg) {
-      // green forecast is straight continuation from last actual point
+    if (model) {
+      // forecast follows the fitted curve, pinned to the last actual point so the
+      // dashed line joins the data smoothly (a fit line at tLast sits slightly off
+      // the latest reading, which would show as a kink)
+      var lastPt = actual[actual.length - 1];
       var forecast = [];
-      forecast.push({ x: actual[actual.length - 1].x, y: actual[actual.length - 1].y });
-      for (var d = 1; d <= 7; d++) {
-        var x = actual[actual.length - 1].x + d * 86400000;
-        var t = reg.tLast + d * 24;
-        var y = Math.round(reg.slope * t + reg.intercept);
-        forecast.push({ x: x, y: y });
+      for (var d = 0; d <= 7; d++) {
+        forecast.push({
+          x: lastPt.x + d * 86400000,
+          y: Math.round(lastPt.y + model.yAt(model.tLast + 24 * d) - model.yAt(model.tLast))
+        });
       }
       datasets.push({
         label: "7-day forecast",
@@ -112,7 +194,8 @@
         backgroundColor: "transparent",
         borderDash: [7, 5],
         fill: false,
-        tension: 0,
+        tension: 0.35,
+        cubicInterpolationMode: "monotone",
         pointRadius: 0,
         borderWidth: 2,
         spanGaps: true
@@ -121,7 +204,7 @@
 
     // Y range with padding so points aren't at edge
     var allY = actual.map(function (p) { return p.y; });
-    if (reg) {
+    if (model) {
       var lastF = datasets[1].data[datasets[1].data.length - 1].y;
       allY.push(lastF);
     }
@@ -129,6 +212,11 @@
     var pad = Math.max(120, (yMax - yMin) * 0.18);
     yMin = Math.floor((yMin - pad) / 50) * 50;
     yMax = Math.ceil((yMax + pad) / 50) * 50;
+
+    // X range: half a day of padding around the data so the edge day labels aren't clipped
+    var xEnd = actual[actual.length - 1].x + (model ? 7 * 86400000 : 0);
+    var xMin = dayFloor(actual[0].x) - 43200000;
+    var xMax = xEnd + 43200000;
 
     mainChart = new Chart(c.getContext("2d"), {
       type: "line",
@@ -154,9 +242,22 @@
         scales: {
           x: {
             type: "linear",
+            min: xMin, max: xMax,
+            afterBuildTicks: function (axis) {
+              // one tick per calendar day across the chart
+              var ticks = [];
+              var d = new Date(axis.min);
+              d.setHours(0, 0, 0, 0);
+              d.setDate(d.getDate() + 1);
+              while (d.getTime() < axis.max) {
+                ticks.push({ value: d.getTime() });
+                d.setDate(d.getDate() + 1);
+              }
+              axis.ticks = ticks;
+            },
             ticks: {
               color: "#52525b",
-              maxTicksLimit: 7,
+              autoSkip: true, maxRotation: 0,
               font: { size: 10, family: "JetBrains Mono" },
               callback: function (val) {
                 var d = new Date(val);
@@ -213,5 +314,21 @@
     });
   }
 
-  document.addEventListener("DOMContentLoaded", function () { fetchData(); setInterval(fetchData, 5 * 60 * 1000); });
+  document.addEventListener("DOMContentLoaded", function () {
+    // Chart.js measures tick labels with canvas font metrics at first render; if the
+    // web fonts swap in afterwards, the wider glyphs overflow the reserved axis width
+    // and the leading digit gets clipped at the canvas edge. Kick off the font loads
+    // explicitly and wait for them (max 2s) before drawing.
+    var boot = function () { fetchData(); setInterval(fetchData, 5 * 60 * 1000); };
+    var fontsReady = (document.fonts && document.fonts.load)
+      ? Promise.all([
+          document.fonts.load('400 10px "JetBrains Mono"'),
+          document.fonts.load('700 10px "JetBrains Mono"'),
+          document.fonts.load('400 12px Inter'),
+          document.fonts.load('700 12px Inter')
+        ]).catch(function () {})
+      : Promise.resolve();
+    var timeout = new Promise(function (res) { setTimeout(res, 2000); });
+    Promise.race([fontsReady, timeout]).then(boot);
+  });
 })();
